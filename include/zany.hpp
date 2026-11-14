@@ -142,56 +142,6 @@ namespace anyc
     
 };
 
-static int id = 0;
-
-class Only_move
-{
-    public:
-    Only_move() :i{++id}{};
-
-    Only_move(const Only_move&) = delete;
-
-    Only_move(Only_move&& rval)
-    {
-        i = rval.i;
-        std::cout<<"only_move is moved!"<<std::endl;
-    }
-
-    ~Only_move(){std::cout<<"only_move is called!"<<i<<std::endl;}
-
-    void get_id()
-    {
-        std::cout<<"id : "<<i<<std::endl;
-    }
-    private:  
-
-    int i;
-};
-
-class Only_move_l
-{
-    public:
-    Only_move_l() :i{++id}{};
-
-    Only_move_l(const Only_move_l&) = delete;
-
-    Only_move_l(Only_move_l&& rval)
-    {
-        i = rval.i;
-        std::cout<<"only_move is moved!"<<std::endl;
-    }
-
-    ~Only_move_l(){std::cout<<"only_move is called!"<<i<<std::endl;}
-
-    void get_id()
-    {
-        std::cout<<"id : "<<i<<std::endl;
-    }
-    private:  
-    std::string s;
-    int i;
-};
-
 template<class _Tp>
 constexpr size_t obj_offset()
 {
