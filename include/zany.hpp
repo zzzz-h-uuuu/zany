@@ -1,3 +1,4 @@
+
 #ifndef ZANY_HPP
 #define ZANY_HPP
 
@@ -106,91 +107,43 @@ inline std::string readable_type(const char* mangled)
 namespace anyc
 {
     template<class _Tp,class _Obj>
-    concept constructor = requires
-    {
-        requires (!std::is_same_v<std::decay_t<_Tp>, std::decay_t<_Obj>>);
-    };
+    struct constructor : std::bool_constant<
+        !std::is_same_v<std::decay_t<_Tp>, std::decay_t<_Obj>>> {};
 
 
-    template<class _Tp , class _Storage>
-    concept is_internal = requires
-    {
-        requires sizeof(_Tp) <= sizeof(_Storage);
-        requires alignof(_Tp) <= alignof(_Storage);
-        std::is_nothrow_move_constructible_v<_Tp>;
-    };
+    template<class _Tp, class _Storage, class = void>
+    struct is_internal : std::false_type {};
+
+    template<class _Tp, class _Storage>
+    struct is_internal<_Tp, _Storage, std::void_t<
+        decltype(sizeof(_Tp)),
+        decltype(alignof(_Tp)),
+        decltype(std::is_nothrow_move_constructible_v<_Tp>)>>
+        : std::bool_constant<
+            sizeof(_Tp) <= sizeof(_Storage) &&
+            alignof(_Tp) <= alignof(_Storage)> {};
 
     template<class _Tp>
-    concept is_only_move = requires
-    {
-        requires std::is_move_constructible_v<_Tp>;
-        requires (!std::is_copy_constructible_v<_Tp>);
-    };
+    struct is_only_move : std::bool_constant<
+        std::is_move_constructible_v<_Tp> &&
+        !std::is_copy_constructible_v<_Tp>> {};
     
     template<class _Tp,class...Args>
-    concept able_to_emplace = 
+    struct able_to_emplace : std::bool_constant<
         std::is_constructible_v<_Tp, Args...>
-        &&
-        std::is_move_constructible_v<_Tp>; 
+        && std::is_move_constructible_v<_Tp>> {};
     
 
     template<class _Tp>
-    concept valid_to_cast = std::is_reference_v<_Tp>||std::is_copy_constructible_v<_Tp>;
+    struct valid_to_cast : std::bool_constant<
+        std::is_reference_v<_Tp> || std::is_copy_constructible_v<_Tp>> {};
 
     template<class _Tp>
-    concept valid_to_cast_r = std::is_reference_v<_Tp>||std::is_move_constructible_v<_Tp>;
+    struct valid_to_cast_r : std::bool_constant<
+        std::is_reference_v<_Tp> || std::is_move_constructible_v<_Tp>> {};
     
 };
 
-static int id = 0;
-
-class Only_move
-{
-    public:
-    Only_move() :i{++id}{};
-
-    Only_move(const Only_move&) = delete;
-
-    Only_move(Only_move&& rval)
-    {
-        i = rval.i;
-        std::cout<<"only_move is moved!"<<std::endl;
-    }
-
-    ~Only_move(){std::cout<<"only_move is called!"<<i<<std::endl;}
-
-    void get_id()
-    {
-        std::cout<<"id : "<<i<<std::endl;
-    }
-    private:  
-
-    int i;
-};
-
-class Only_move_l
-{
-    public:
-    Only_move_l() :i{++id}{};
-
-    Only_move_l(const Only_move_l&) = delete;
-
-    Only_move_l(Only_move_l&& rval)
-    {
-        i = rval.i;
-        std::cout<<"only_move is moved!"<<std::endl;
-    }
-
-    ~Only_move_l(){std::cout<<"only_move is called!"<<i<<std::endl;}
-
-    void get_id()
-    {
-        std::cout<<"id : "<<i<<std::endl;
-    }
-    private:  
-    std::string s;
-    int i;
-};
 
 template<class _Tp>
 constexpr size_t obj_offset()
@@ -205,6 +158,7 @@ constexpr size_t max_align()
 {
     return alignof(std::atomic<int>) < alignof(_Tp) ? alignof(_Tp) : alignof(std::atomic<int>);
 }
+
 class zany
 {
     union Storage  
@@ -261,13 +215,13 @@ class zany
      struct exter_move_manager;
 
     template<class _Tp>
-    using _sbo_cond_for_m = std::conditional_t<anyc::is_internal<_Tp, Storage>, inter_move_manager<_Tp>, exter_move_manager<_Tp>>;
+    using _sbo_cond_for_m = std::conditional_t<anyc::is_internal<_Tp, Storage>::value, inter_move_manager<_Tp>, exter_move_manager<_Tp>>;
     
     template<class _Tp>
-    using _sbo_cond_for_c = std::conditional_t<anyc::is_internal<_Tp, Storage>, inter_copy_manager<_Tp>, exter_copy_manager<_Tp>>;
+    using _sbo_cond_for_c = std::conditional_t<anyc::is_internal<_Tp, Storage>::value, inter_copy_manager<_Tp>, exter_copy_manager<_Tp>>;
 
     template<class T,class _Tp = std::decay_t<T>>
-    using _manager = std::conditional_t<anyc::is_only_move<_Tp>, _sbo_cond_for_m<_Tp>, _sbo_cond_for_c<_Tp>>;
+    using _manager = std::conditional_t<anyc::is_only_move<_Tp>::value, _sbo_cond_for_m<_Tp>, _sbo_cond_for_c<_Tp>>;
 
     enum _Op {
 	_Op_access, _Op_clone, _Op_destroy, _Op_xfer
@@ -558,8 +512,8 @@ class zany
 
     constexpr zany()noexcept :_M_manager(nullptr){}
 
-    template<class _Tp, class _uTp = std::decay_t<_Tp>>
-    requires (!std::is_same_v<_uTp, zany>)
+    template<class _Tp, class _uTp = std::decay_t<_Tp>,
+        std::enable_if_t<anyc::constructor<_Tp, zany>::value, int> = 0>
     zany(_Tp&& t) : _M_manager(nullptr)
     {
         using _Mgr = _manager<_uTp>;
@@ -609,16 +563,16 @@ class zany
 
     ~zany()noexcept {reset();}
 
-    template<class _Tp, class _vTp = std::decay_t<_Tp>,  class...Args>
-    requires anyc::able_to_emplace<_vTp, Args...>
+    template<class _Tp, class _vTp = std::decay_t<_Tp>, class...Args,
+        std::enable_if_t<anyc::able_to_emplace<_vTp, Args...>::value, int> = 0>
     _vTp& emplace(Args&&...arg)
     {
         _do_emplace<_vTp>(std::forward<Args>(arg)...);
         return *zany::_manager<_vTp>::_s_access(_M_storage);
     }
     
-    template<class _Tp, class _Up, class...Args, typename _vTp = std::decay_t<_Tp>>
-    requires anyc::able_to_emplace<_vTp,std::initializer_list<_Up>, Args...>
+    template<class _Tp, class _Up, class...Args, typename _vTp = std::decay_t<_Tp>,
+        std::enable_if_t<anyc::able_to_emplace<_vTp,std::initializer_list<_Up>, Args...>::value, int> = 0>
     _vTp& emplace(std::initializer_list<_Up> v, Args&&... arg)
     {
         _do_emplace(v,std::forward<Args>(arg)...);
@@ -682,22 +636,22 @@ class zany
 };
 
 template<class _Tp,class...Args>
-requires anyc::able_to_emplace<_Tp,Args...>
-inline zany make_any(Args&&...args)
+inline std::enable_if_t<anyc::able_to_emplace<_Tp,Args...>::value, zany>
+make_any(Args&&...args)
 {
     return zany(std::in_place_type<_Tp>,std::forward<Args>(args)...);
 }
 
 template<class _Tp,class _Up,class...Args>
-requires anyc::able_to_emplace<_Tp,std::initializer_list<_Up>,Args...>
-inline zany make_any(std::initializer_list<_Up> list,Args&&...args)
+inline std::enable_if_t<anyc::able_to_emplace<_Tp,std::initializer_list<_Up>,Args...>::value, zany>
+make_any(std::initializer_list<_Up> list,Args&&...args)
 {
     return zany(std::in_place_type<_Tp>,list,std::forward<Args>(args)...);
 }
 
 template<class _Tp>
-requires anyc::valid_to_cast_r<_Tp>
-inline _Tp any_cast(zany&& any)
+inline std::enable_if_t<anyc::valid_to_cast_r<_Tp>::value, _Tp>
+any_cast(zany&& any)
 {
     using _Up = std::remove_cvref_t<_Tp>;
     static_assert(std::is_constructible_v<_Up, _Tp>,"Template argument must be constructible from an rvalue.");
@@ -729,8 +683,8 @@ inline _Tp* any_cast(zany* any) noexcept
     return nullptr;
 }
 template<class _Tp>
-requires anyc::valid_to_cast<_Tp>
-inline _Tp any_cast(zany& any)
+inline std::enable_if_t<anyc::valid_to_cast<_Tp>::value, _Tp>
+any_cast(zany& any)
 {
     using _Up = std::remove_cvref_t<_Tp>;
     static_assert(std::is_constructible_v<_Up, _Tp>,"Template argument must be constructible from an lvalue.");
@@ -754,4 +708,3 @@ void* _any_caster(const zany* any)
     auto ptr2 = any->_M_manager;
     return nullptr;
 }
-

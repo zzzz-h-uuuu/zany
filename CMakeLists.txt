@@ -13,7 +13,7 @@ target_include_directories(zany INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
-target_compile_features(zany INTERFACE cxx_std_20)
+target_compile_features(zany INTERFACE cxx_std_17)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
