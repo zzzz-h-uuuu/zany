@@ -1,4 +1,8 @@
-
+/*
+zany:a suppliment to C++17 std::any
+writed by zzzz-h-uuuu
+email:zzz_h_uuu@outlook.com
+*/
 #ifndef ZANY_HPP
 #define ZANY_HPP
 
