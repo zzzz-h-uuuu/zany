@@ -33,3 +33,4 @@ terminate called after throwing an instance of 'std::runtime_error'
 
 - v1.0.0: Supports GCC compilers only, requires C++20 or later. No known operating system restrictions.
 - v1.1.0: Supports GCC compilers only, but remove all demands about `concept`, so now it requires C++17.
+- v1.1.1: Fix exception of `any_cast` for variable docorated by `const`.

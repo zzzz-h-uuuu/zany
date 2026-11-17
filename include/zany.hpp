@@ -9,6 +9,7 @@ email:zzz_h_uuu@outlook.com
 
 // Compiler detection
 
+#include <type_traits>
 #if defined(__GNUC__) 
     #define ZANY_COMPILER_GCC 1
 #else
@@ -108,11 +109,13 @@ inline std::string readable_type(const char* mangled)
     return result;
 }
 
+class zany;
+
 namespace anyc
 {
-    template<class _Tp,class _Obj>
-    struct constructor : std::bool_constant<
-        !std::is_same_v<std::decay_t<_Tp>, std::decay_t<_Obj>>> {};
+    template<class _Tp, class _VTp = std::decay_t<_Tp>>
+    using decay_if_not_zany_t = typename std::enable_if<
+        !std::is_same<_VTp, zany>::value, _VTp>::type;
 
 
     template<class _Tp, class _Storage, class = void>
@@ -128,23 +131,41 @@ namespace anyc
             alignof(_Tp) <= alignof(_Storage)> {};
 
     template<class _Tp>
-    struct is_only_move : std::bool_constant<
-        std::is_move_constructible_v<_Tp> &&
-        !std::is_copy_constructible_v<_Tp>> {};
+    struct is_only_move : std::integral_constant<bool,
+        std::is_move_constructible<_Tp>::value &&
+        !std::is_copy_constructible<_Tp>::value> {};
     
-    template<class _Tp,class...Args>
-    struct able_to_emplace : std::bool_constant<
-        std::is_constructible_v<_Tp, Args...>
-        && std::is_move_constructible_v<_Tp>> {};
-    
+    template<class _Res, class _Tp, class... _Args>
+    using any_constructible = std::enable_if<
+        std::is_move_constructible<_Tp>::value &&
+        std::is_constructible<_Tp, _Args...>::value,
+        _Res>;
+
+    template<class _Tp, class... _Args>
+    using emplace_t =
+        typename any_constructible<_Tp&, _Tp, _Args...>::type;
+
+    template<class _Tp, class... _Args>
+    using make_any_t =
+        typename any_constructible<zany, _Tp, _Args...>::type;
 
     template<class _Tp>
-    struct valid_to_cast : std::bool_constant<
-        std::is_reference_v<_Tp> || std::is_copy_constructible_v<_Tp>> {};
+    struct valid_to_cast : std::integral_constant<bool,
+        std::is_reference<_Tp>::value ||
+        std::is_copy_constructible<_Tp>::value> {};
 
     template<class _Tp>
-    struct valid_to_cast_r : std::bool_constant<
-        std::is_reference_v<_Tp> || std::is_move_constructible_v<_Tp>> {};
+    struct valid_to_cast_r : std::integral_constant<bool,
+        std::is_reference<_Tp>::value ||
+        std::is_move_constructible<_Tp>::value> {};
+
+    template<class _Tp>
+    using valid_to_cast_t =
+        typename std::enable_if<valid_to_cast<_Tp>::value, _Tp>::type;
+
+    template<class _Tp>
+    using valid_to_cast_r_t =
+        typename std::enable_if<valid_to_cast_r<_Tp>::value, _Tp>::type;
     
 };
 
@@ -516,8 +537,7 @@ class zany
 
     constexpr zany()noexcept :_M_manager(nullptr){}
 
-    template<class _Tp, class _uTp = std::decay_t<_Tp>,
-        std::enable_if_t<anyc::constructor<_Tp, zany>::value, int> = 0>
+    template<class _Tp, class _uTp = anyc::decay_if_not_zany_t<_Tp>>
     zany(_Tp&& t) : _M_manager(nullptr)
     {
         using _Mgr = _manager<_uTp>;
@@ -567,17 +587,16 @@ class zany
 
     ~zany()noexcept {reset();}
 
-    template<class _Tp, class _vTp = std::decay_t<_Tp>, class...Args,
-        std::enable_if_t<anyc::able_to_emplace<_vTp, Args...>::value, int> = 0>
-    _vTp& emplace(Args&&...arg)
+    template<class _Tp, class _vTp = std::decay_t<_Tp>, class...Args>
+    anyc::emplace_t<_vTp, Args...> emplace(Args&&...arg)
     {
         _do_emplace<_vTp>(std::forward<Args>(arg)...);
         return *zany::_manager<_vTp>::_s_access(_M_storage);
     }
     
-    template<class _Tp, class _Up, class...Args, typename _vTp = std::decay_t<_Tp>,
-        std::enable_if_t<anyc::able_to_emplace<_vTp,std::initializer_list<_Up>, Args...>::value, int> = 0>
-    _vTp& emplace(std::initializer_list<_Up> v, Args&&... arg)
+    template<class _Tp, class _Up, class...Args, typename _vTp = std::decay_t<_Tp>>
+    anyc::emplace_t<_vTp, std::initializer_list<_Up>, Args...>
+    emplace(std::initializer_list<_Up> v, Args&&... arg)
     {
         _do_emplace(v,std::forward<Args>(arg)...);
         return *zany::_manager<_vTp>::_s_access(_M_storage);
@@ -640,24 +659,39 @@ class zany
 };
 
 template<class _Tp,class...Args>
-inline std::enable_if_t<anyc::able_to_emplace<_Tp,Args...>::value, zany>
+inline anyc::make_any_t<_Tp, Args...>
 make_any(Args&&...args)
 {
     return zany(std::in_place_type<_Tp>,std::forward<Args>(args)...);
 }
 
 template<class _Tp,class _Up,class...Args>
-inline std::enable_if_t<anyc::able_to_emplace<_Tp,std::initializer_list<_Up>,Args...>::value, zany>
+inline anyc::make_any_t<_Tp, std::initializer_list<_Up>, Args...>
 make_any(std::initializer_list<_Up> list,Args&&...args)
 {
     return zany(std::in_place_type<_Tp>,list,std::forward<Args>(args)...);
 }
 
 template<class _Tp>
-inline std::enable_if_t<anyc::valid_to_cast_r<_Tp>::value, _Tp>
+void* _any_caster(const zany* any)
+{
+    using Msg = zany::_manager<std::remove_cv_t<_Tp>>;
+    if constexpr (!std::is_same_v<std::decay_t<_Tp>, _Tp>&& ! std::is_same_v<const std::decay_t<_Tp>, _Tp>)
+        return nullptr;
+    if(any ==nullptr)
+        return nullptr;
+    else if (any->_M_manager == &Msg::_s_manager )//rtti
+        return static_cast<_Tp*>(Msg::_s_access(any->_M_storage));
+    auto ptr = &Msg::_s_manager;
+    auto ptr2 = any->_M_manager;
+    return nullptr;
+}
+
+template<class _Tp>
+inline anyc::valid_to_cast_r_t<_Tp>
 any_cast(zany&& any)
 {
-    using _Up = std::remove_cvref_t<_Tp>;
+    using _Up =  std::remove_cv_t<std::remove_reference_t<_Tp>>;
     static_assert(std::is_constructible_v<_Up, _Tp>,"Template argument must be constructible from an rvalue.");
     auto ptr = any_cast<_Up>(&any);
     if(ptr)
@@ -686,12 +720,16 @@ inline _Tp* any_cast(zany* any) noexcept
 
     return nullptr;
 }
+
 template<class _Tp>
-inline std::enable_if_t<anyc::valid_to_cast<_Tp>::value, _Tp>
+inline anyc::valid_to_cast_t<_Tp>
 any_cast(zany& any)
 {
-    using _Up = std::remove_cvref_t<_Tp>;
-    static_assert(std::is_constructible_v<_Up, _Tp>,"Template argument must be constructible from an lvalue.");
+    using _Up =  std::remove_cv_t<std::remove_reference_t<_Tp>>;
+    if constexpr (std::is_copy_constructible_v<_Up>) 
+    {
+        static_assert(std::is_constructible_v<_Up, _Tp>,"Template argument must be constructible from an lvalue.");
+    }
     auto ptr = any_cast<_Up>(&any);
     if(ptr)
         return static_cast<_Tp>(*ptr);
@@ -699,16 +737,21 @@ any_cast(zany& any)
 }
 
 template<class _Tp>
-void* _any_caster(const zany* any)
+inline anyc::valid_to_cast_t<_Tp>
+any_cast(const zany& any)
 {
-    using Msg = zany::_manager<std::remove_cv_t<_Tp>>;
-    if constexpr (!std::is_same_v<std::decay_t<_Tp>, _Tp>&& ! std::is_same_v<const std::decay_t<_Tp>, _Tp>)
-        return nullptr;
-    if(any ==nullptr)
-        return nullptr;
-    else if (any->_M_manager == &Msg::_s_manager )//rtti
-        return static_cast<_Tp*>(Msg::_s_access(any->_M_storage));
-    auto ptr = &Msg::_s_manager;
-    auto ptr2 = any->_M_manager;
-    return nullptr;
+    using _Up = std::remove_cv_t<std::remove_reference_t<_Tp>>;
+    static_assert(std::is_const_v<_Tp>,"Template argument must be a const");
+    if constexpr (std::is_copy_constructible_v<_Up>) 
+    {
+        static_assert(std::is_constructible_v<_Tp, const _Up>, "Template argument must be constructible from a const value.");
+        static_assert(std::is_constructible_v<_Up, _Tp>,"Template argument must be constructible from an const lvalue.");
+    }
+
+    auto ptr = any_cast<_Up>(&any);
+    if(ptr)
+        return static_cast<_Tp>(*ptr);
+    throw std::bad_any_cast{};
 }
+
+
